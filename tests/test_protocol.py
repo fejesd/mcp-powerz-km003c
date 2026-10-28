@@ -116,3 +116,28 @@ def test_parse_putdata_adcqueue_payload_is_chunk_times_size():
     _, pkts = parse_putdata(bytes.fromhex("41010000") + ext + samples)
     assert len(pkts[0].payload) == 60
     assert [s.sequence for s in parse_adcqueue(pkts[0].payload, 3)] == [100, 101, 102]
+
+
+# Real captures from a KM003C (fw 1.8.4) between a PD charger and a phone.
+REAL_ATTACH_RECORDS = bytes.fromhex("836c2f00a901000001000000" "458f602f0011" "459a622f0012")
+REAL_CONTRACT = bytes.fromhex(
+    "a1d02f009b14e6ff8b030100"
+    "8b73d02f0000a1175a900127" "8774d02f00004106" "8b77d02f000082125a688113"
+    "8778d02f00006103" "877cd02f0000a309" "877dd02f00004108")
+
+
+def test_parse_pd_legacy_connection_codes():
+    ev = parse_pd(REAL_ATTACH_RECORDS).events
+    assert [e.kind for e in ev] == ["connect", "disconnect"]
+    assert ev[0].timestamp_ms == 0x2F608F
+
+
+def test_parse_pd_real_contract_capture():
+    from km003c_mcp.pd import PdDecoder
+    stream = parse_pd(REAL_CONTRACT)
+    dec = PdDecoder()
+    decoded = [dec.decode(e) for e in stream.events]
+    assert [d["type"] for d in decoded] == [
+        "Source_Capabilities", "GoodCRC", "Request", "GoodCRC", "Accept", "GoodCRC"]
+    assert decoded[0]["pdos"] == [{"position": 1, "type": "fixed", "voltage_v": 5.0, "max_current_a": 0.9}]
+    assert decoded[2]["request"]["object_position"] == 1

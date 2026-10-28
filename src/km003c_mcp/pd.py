@@ -83,6 +83,63 @@ def decode_request(rdo: int, source_pdos: list[dict] | None = None) -> dict:
             "max_current_a": _r(_bits(rdo, 9, 0) * 0.01)}
 
 
+SVID_NAMES = {0xFF00: "PD_SID", 0xFF01: "DisplayPort", 0x8087: "Intel"}
+VDM_COMMANDS = {1: "Discover_Identity", 2: "Discover_SVIDs", 3: "Discover_Modes", 4: "Enter_Mode",
+                5: "Exit_Mode", 6: "Attention", 16: "DP_Status_Update", 17: "DP_Configure"}
+VDM_COMMAND_TYPES = {0: "REQ", 1: "ACK", 2: "NAK", 3: "BUSY"}
+DP_PORT_CAPABILITY = {0: "reserved", 1: "UFP_D", 2: "DFP_D", 3: "UFP_D_and_DFP_D"}
+DP_CONNECTED = {0: "none", 1: "DFP_D", 2: "UFP_D", 3: "both"}
+DP_CONFIGURATION = {0: "USB", 1: "UFP_U_as_DFP_D", 2: "UFP_U_as_UFP_D", 3: "reserved"}
+SVID_DP = 0xFF01
+
+
+def _pins(mask: int) -> list[str]:
+    return [chr(ord("A") + i) for i in range(6) if mask & (1 << i)]
+
+
+def _dp_capabilities(vdo: int) -> dict:
+    return {"port_capability": DP_PORT_CAPABILITY[_bits(vdo, 1, 0)], "dp13": bool(vdo & 1 << 2),
+            "gen2": bool(vdo & 1 << 3), "receptacle": bool(vdo & 1 << 6),
+            "dfp_d_pins": _pins(_bits(vdo, 15, 8)), "ufp_d_pins": _pins(_bits(vdo, 23, 16))}
+
+
+def _dp_status(vdo: int) -> dict:
+    return {"connected": DP_CONNECTED[_bits(vdo, 1, 0)], "power_low": bool(vdo & 1 << 2),
+            "enabled": bool(vdo & 1 << 3), "multi_function_preferred": bool(vdo & 1 << 4),
+            "usb_config_request": bool(vdo & 1 << 5), "exit_request": bool(vdo & 1 << 6),
+            "hpd": bool(vdo & 1 << 7), "irq_hpd": bool(vdo & 1 << 8)}
+
+
+def _dp_configuration(vdo: int) -> dict:
+    return {"configuration": DP_CONFIGURATION[_bits(vdo, 1, 0)], "signaling": _bits(vdo, 5, 2),
+            "pin_assignment": _pins(_bits(vdo, 15, 8))}
+
+
+def decode_vdm(objects: list[int]) -> dict:
+    """Decode a Vendor_Defined message: VDM header plus Discover_SVIDs and DisplayPort VDOs."""
+    header, vdos = objects[0], objects[1:]
+    svid = header >> 16
+    out: dict = {"svid": f"0x{svid:04x}", "svid_name": SVID_NAMES.get(svid, "unknown"),
+                 "structured": bool(header & 1 << 15)}
+    if not out["structured"]:
+        return out
+    command = _bits(header, 4, 0)
+    ctype = VDM_COMMAND_TYPES[_bits(header, 7, 6)]
+    out.update({"command": VDM_COMMANDS.get(command, f"SVID_Specific_{command}"),
+                "command_type": ctype, "object_position": _bits(header, 10, 8),
+                "version": f"{_bits(header, 14, 13) + 1}.{_bits(header, 12, 11)}"})
+    if command == 2 and ctype == "ACK":
+        out["svids"] = [f"0x{v:04x}" for vdo in vdos for v in (vdo >> 16, vdo & 0xFFFF) if v]
+    elif svid == SVID_DP and vdos:
+        if command == 3 and ctype == "ACK":
+            out["dp_capabilities"] = [_dp_capabilities(v) for v in vdos]
+        elif command in (6, 16):
+            out["dp_status"] = _dp_status(vdos[0])
+        elif command == 17:
+            out["dp_configuration"] = _dp_configuration(vdos[0])
+    return out
+
+
 def decode_message(wire: bytes, sop: int, source_pdos: list[dict] | None = None) -> dict:
     if len(wire) < 2:
         return {"error": "PD message shorter than its 2-byte header", "raw": wire.hex()}
@@ -117,6 +174,8 @@ def decode_message(wire: bytes, sop: int, source_pdos: list[dict] | None = None)
             out["pdos"] = [{"position": i + 1, **decode_pdo(o)} for i, o in enumerate(objects)]
         elif name in _REQUEST_TYPES and objects:
             out["request"] = decode_request(objects[0], source_pdos)
+        elif name == "Vendor_Defined" and objects:
+            out["vdm"] = decode_vdm(objects)
     if len(wire) > body_end:
         out["trailing"] = wire[body_end:].hex()
     return out

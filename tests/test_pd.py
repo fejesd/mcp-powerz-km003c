@@ -64,3 +64,45 @@ def test_connect_event_passthrough():
 
 def test_too_short_wire():
     assert "error" in decode_message(b"\x01", 0)
+
+
+def _vdm(objects, source=True):
+    hdr = (len(objects) << 12) | ((1 << 8) if source else 0) | (2 << 6) | 15
+    return hdr.to_bytes(2, "little") + b"".join(o.to_bytes(4, "little") for o in objects)
+
+
+# The DisplayPort VDOs below come from a real capture of DP alt mode entry (KM003C fw 1.8.4).
+def test_vdm_discover_svids_ack():
+    m = decode_message(_vdm([0xFF00A042, 0xFF010000], source=False), 0)
+    assert m["vdm"]["structured"] and m["vdm"]["svid"] == "0xff00"
+    assert (m["vdm"]["command"], m["vdm"]["command_type"]) == ("Discover_SVIDs", "ACK")
+    assert m["vdm"]["svids"] == ["0xff01"]
+
+
+def test_vdm_dp_discover_modes_ack():
+    m = decode_message(_vdm([0xFF01A043, 0x00140045], source=False), 0)
+    v = m["vdm"]
+    assert (v["svid_name"], v["command"]) == ("DisplayPort", "Discover_Modes")
+    assert v["dp_capabilities"][0] == {
+        "port_capability": "UFP_D", "dp13": True, "gen2": False, "receptacle": True,
+        "dfp_d_pins": [], "ufp_d_pins": ["C", "E"]}
+
+
+def test_vdm_dp_enter_mode_request():
+    v = decode_message(_vdm([0xFF018104]), 0)["vdm"]
+    assert (v["command"], v["command_type"], v["object_position"]) == ("Enter_Mode", "REQ", 1)
+
+
+def test_vdm_dp_configure_request():
+    v = decode_message(_vdm([0xFF018111, 0x00000406]), 0)["vdm"]
+    assert v["command"] == "DP_Configure"
+    assert v["dp_configuration"] == {"configuration": "UFP_U_as_UFP_D", "signaling": 1,
+                                     "pin_assignment": ["C"]}
+
+
+def test_vdm_dp_attention_hpd():
+    v = decode_message(_vdm([0xFF018106, 0x0000008A], source=False), 0)["vdm"]
+    assert v["command"] == "Attention"
+    assert v["dp_status"] == {"connected": "UFP_D", "power_low": False, "enabled": True,
+                              "multi_function_preferred": False, "usb_config_request": False,
+                              "exit_request": False, "hpd": True, "irq_hpd": False}

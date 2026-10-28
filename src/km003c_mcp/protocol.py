@@ -210,8 +210,9 @@ def parse_adcqueue(payload: bytes, rate_index: int) -> list[AdcQueueSample]:
 PD_STATUS_SIZE = 12
 PD_EVENT_HEADER_SIZE = 6
 PD_EVENT_CONNECTION = 0x45
-PD_EVENT_CONNECT = 0x21
-PD_EVENT_DISCONNECT = 0x22
+# Firmware 1.8.x uses 0x11/0x12 for the same attach/detach records.
+PD_EVENT_CONNECT = (0x21, 0x11)
+PD_EVENT_DISCONNECT = (0x22, 0x12)
 
 
 @dataclass(frozen=True)
@@ -260,9 +261,9 @@ def parse_pd(payload: bytes) -> PdStatus | PdEventStream:
         if head[0] == PD_EVENT_CONNECTION:
             ts = int.from_bytes(head[1:4], "little")
             code = head[5]
-            if code == PD_EVENT_CONNECT:
+            if code in PD_EVENT_CONNECT:
                 events.append(PdEvent(ts, "connect", None, b""))
-            elif code == PD_EVENT_DISCONNECT:
+            elif code in PD_EVENT_DISCONNECT:
                 events.append(PdEvent(ts, "disconnect", None, b""))
             else:
                 events.append(PdEvent(ts, "message", code, b""))
