@@ -39,7 +39,7 @@ claude mcp add km003c -- <repo>\.venv\Scripts\km003c-mcp.exe
 | `measure` | VBUS/IBUS/power, CC1/CC2, D+/D−, VDD, temperature; optional averaging |
 | `pd_status` | PD-side snapshot (VBUS, IBUS, CC1, CC2) |
 | `stream_start` / `stream_status` / `stream_samples` / `stream_stop` | Background sampling at 2/10/50/1000 SPS with min/max/mean, energy (Wh), charge (mAh), dropped-sample count and optional CSV |
-| `pd_capture_start` / `pd_capture_read` / `pd_capture_stop` | Background PD sniffing: attach/detach and the full USB PD R3.1 message set decoded � PDOs/RDOs (incl. PPS, AVS, EPR), PD 3.x data objects, extended messages with chunk reassembly, structured VDMs (Discover Identity incl. cable VDOs, SVIDs, DisplayPort and Thunderbolt 3 alt modes) |
+| `pd_capture_start` / `pd_capture_read` / `pd_capture_stop` | Background PD sniffing: attach/detach and the full USB PD R3.1 message set decoded - PDOs/RDOs (incl. PPS, AVS, EPR), PD 3.x data objects, extended messages with chunk reassembly, structured VDMs (Discover Identity incl. cable VDOs, SVIDs, DisplayPort and Thunderbolt 3 alt modes) |
 | `trigger_detect` / `trigger_enter` | Protocol detection (`entry list`, `entry list+`) and entering a protocol |
 | `trigger_pd_source_caps` / `trigger_pd_request` | Read the charger's PDOs and request a fixed/PPS/AVS contract |
 | `trigger_fast_charge` | QC2/QC3/FCP/AFC/SFCP/SCP/VFCP/TFCP/UFCS voltage requests |
@@ -62,3 +62,7 @@ $env:KM003C_HW="1"; .venv\Scripts\pytest tests\test_hw.py   # against a real met
   [okhsunrog/km003c-rs](https://github.com/okhsunrog/km003c-rs) (MIT/Apache-2.0): bulk protocol, AES framing, PD event format.
 - ChargerLab's "KM003C/002C Protocol Trigger by Virtual Serial Port" sheet (installed with the POWER-Z software).
 - Linux `drivers/hwmon/powerz.c`: ADC layout cross-check.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

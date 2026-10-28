@@ -7,6 +7,8 @@ name = "km003c-mcp"
 version = "0.1.0"
 description = "MCP server for the ChargerLab POWER-Z KM003C USB-C power meter"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=2,<3",
