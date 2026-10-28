@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "km003c-mcp"
+version = "0.1.0"
+description = "MCP server for the ChargerLab POWER-Z KM003C USB-C power meter"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.2",
+    "pyusb>=1.2",
+    "libusb-package",
+    "pyserial>=3.5",
+    "cryptography>=42",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+km003c-mcp = "km003c_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/km003c_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = ["hw: requires a real KM003C (set KM003C_HW=1)"]
