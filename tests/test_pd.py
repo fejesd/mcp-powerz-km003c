@@ -106,3 +106,22 @@ def test_vdm_dp_attention_hpd():
     assert v["dp_status"] == {"connected": "UFP_D", "power_low": False, "enabled": True,
                               "multi_function_preferred": False, "usb_config_request": False,
                               "exit_request": False, "hpd": True, "irq_hpd": False}
+
+
+def test_caps_role_follows_message_type_and_data_objects():
+    # Real Sink_Capabilities and Alert / Battery_Status from a charger + monitor capture.
+    sink = decode_message(bytes.fromhex("84140a90012e"), 0)
+    assert sink["pdos"][0]["operational_current_a"] == 0.1
+    alert = decode_message(bytes.fromhex("a61200001002"), 0)
+    assert alert["data"]["alerts"] == ["battery_status_change"]
+    status = decode_message(bytes.fromhex("a51400021000"), 0)
+    assert status["data"]["present_capacity_wh"] == 1.6
+
+
+def test_epr_request_uses_pdo_copy():
+    rdo = (8 << 28) | (1120 << 9) | 60
+    avs = (3 << 30) | (1 << 28) | (280 << 17) | (150 << 8) | 140
+    hdr = (2 << 12) | (2 << 6) | 9
+    m = decode_message(hdr.to_bytes(2, "little") + rdo.to_bytes(4, "little") + avs.to_bytes(4, "little"), 0)
+    assert m["request"]["output_voltage_v"] == 28.0
+    assert m["requested_pdo"]["type"] == "epr_avs"

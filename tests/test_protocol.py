@@ -139,5 +139,6 @@ def test_parse_pd_real_contract_capture():
     decoded = [dec.decode(e) for e in stream.events]
     assert [d["type"] for d in decoded] == [
         "Source_Capabilities", "GoodCRC", "Request", "GoodCRC", "Accept", "GoodCRC"]
-    assert decoded[0]["pdos"] == [{"position": 1, "type": "fixed", "voltage_v": 5.0, "max_current_a": 0.9}]
+    assert decoded[0]["pdos"][0]["voltage_v"] == 5.0 and decoded[0]["pdos"][0]["max_current_a"] == 0.9
+    assert "dual_role_power" in decoded[0]["pdos"][0]["flags"]
     assert decoded[2]["request"]["object_position"] == 1

@@ -1,7 +1,9 @@
-"""Minimal USB Power Delivery message decoder (header, message names, PDOs, RDOs)."""
+"""USB Power Delivery message decoder (USB PD R3.1 message set)."""
 
 from __future__ import annotations
 
+from .pd_objects import bits as _bits
+from .pd_objects import decode_data_object, decode_pdo, decode_request
 from .protocol import PdEvent
 
 SOP_NAMES = {0: "SOP", 1: "SOP'", 2: "SOP''", 3: "SOP'_Debug", 4: "SOP''_Debug"}
@@ -29,58 +31,7 @@ EXTENDED_TYPES = {
     16: "Extended_Control", 17: "EPR_Source_Capabilities", 18: "EPR_Sink_Capabilities",
     19: "Vendor_Defined_Extended",
 }
-_CAPS_TYPES = {"Source_Capabilities", "Sink_Capabilities"}
 _REQUEST_TYPES = {"Request", "EPR_Request"}
-_PROGRAMMABLE = {"pps", "epr_avs", "spr_avs"}
-
-
-def _bits(value: int, high: int, low: int) -> int:
-    return (value >> low) & ((1 << (high - low + 1)) - 1)
-
-
-def _r(x: float) -> float:
-    return round(x, 3)
-
-
-def decode_pdo(pdo: int) -> dict:
-    kind = _bits(pdo, 31, 30)
-    if kind == 0:
-        return {"type": "fixed", "voltage_v": _r(_bits(pdo, 19, 10) * 0.05),
-                "max_current_a": _r(_bits(pdo, 9, 0) * 0.01)}
-    if kind == 1:
-        return {"type": "battery", "max_voltage_v": _r(_bits(pdo, 29, 20) * 0.05),
-                "min_voltage_v": _r(_bits(pdo, 19, 10) * 0.05),
-                "max_power_w": _r(_bits(pdo, 9, 0) * 0.25)}
-    if kind == 2:
-        return {"type": "variable", "max_voltage_v": _r(_bits(pdo, 29, 20) * 0.05),
-                "min_voltage_v": _r(_bits(pdo, 19, 10) * 0.05),
-                "max_current_a": _r(_bits(pdo, 9, 0) * 0.01)}
-    apdo = _bits(pdo, 29, 28)
-    if apdo == 0:
-        return {"type": "pps", "max_voltage_v": _r(_bits(pdo, 24, 17) * 0.1),
-                "min_voltage_v": _r(_bits(pdo, 15, 8) * 0.1),
-                "max_current_a": _r(_bits(pdo, 6, 0) * 0.05)}
-    if apdo == 1:
-        return {"type": "epr_avs", "max_voltage_v": _r(_bits(pdo, 25, 17) * 0.1),
-                "min_voltage_v": _r(_bits(pdo, 15, 8) * 0.1), "pdp_w": _bits(pdo, 7, 0)}
-    if apdo == 2:
-        return {"type": "spr_avs", "max_current_15v_a": _r(_bits(pdo, 19, 10) * 0.01),
-                "max_current_20v_a": _r(_bits(pdo, 9, 0) * 0.01)}
-    return {"type": "reserved_apdo", "raw": f"{pdo:08x}"}
-
-
-def decode_request(rdo: int, source_pdos: list[dict] | None = None) -> dict:
-    position = _bits(rdo, 31, 28)
-    pdo = None
-    if source_pdos and 1 <= position <= len(source_pdos):
-        pdo = source_pdos[position - 1]
-    if pdo is not None and pdo["type"] in _PROGRAMMABLE:
-        return {"object_position": position,
-                "output_voltage_v": _r(_bits(rdo, 20, 9) * 0.02),
-                "operating_current_a": _r(_bits(rdo, 6, 0) * 0.05)}
-    return {"object_position": position,
-            "operating_current_a": _r(_bits(rdo, 19, 10) * 0.01),
-            "max_current_a": _r(_bits(rdo, 9, 0) * 0.01)}
 
 
 SVID_NAMES = {0xFF00: "PD_SID", 0xFF01: "DisplayPort", 0x8087: "Intel"}
@@ -170,12 +121,21 @@ def decode_message(wire: bytes, sop: int, source_pdos: list[dict] | None = None)
                for i in range(2, min(body_end, len(wire)) - 3, 4)]
     out["objects"] = [f"{o:08x}" for o in objects]
     if not extended:
-        if name in _CAPS_TYPES:
-            out["pdos"] = [{"position": i + 1, **decode_pdo(o)} for i, o in enumerate(objects)]
+        if name in ("Source_Capabilities", "Sink_Capabilities"):
+            # The role comes from the message type: a dual-role port may send either.
+            role = "source" if name == "Source_Capabilities" else "sink"
+            out["pdos"] = [{"position": i + 1, **decode_pdo(o, role)} for i, o in enumerate(objects)]
         elif name in _REQUEST_TYPES and objects:
-            out["request"] = decode_request(objects[0], source_pdos)
+            pdos = source_pdos
+            if name == "EPR_Request" and len(objects) > 1:
+                # An EPR_Request carries a copy of the requested PDO as its second object.
+                out["requested_pdo"] = decode_pdo(objects[1])
+                pdos = [{"type": None}] * (_bits(objects[0], 31, 28) - 1) + [out["requested_pdo"]]
+            out["request"] = decode_request(objects[0], pdos)
         elif name == "Vendor_Defined" and objects:
             out["vdm"] = decode_vdm(objects)
+        elif objects and (data := decode_data_object(name, objects[0])) is not None:
+            out["data"] = data
     if len(wire) > body_end:
         out["trailing"] = wire[body_end:].hex()
     return out
