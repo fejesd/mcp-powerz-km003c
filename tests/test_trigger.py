@@ -79,3 +79,10 @@ def test_find_port_missing(monkeypatch):
     _ports(monkeypatch, [])
     with pytest.raises(Km003cError):
         find_trigger_port("014270")
+
+
+def test_binary_reply_lines_are_rendered_as_hex():
+    # Real `entry pd` reply: after "pdo:2" the meter dumps the raw PDO block.
+    fs = FakeSerial({"entry pd": [b"cc2 attach\npdo:2\n,\x91\x01\x08,\xd1\x02\x00\x00\x00\x00\nready:5112mV,0mA\n"]})
+    assert _port(fs).command("entry pd", idle_s=0.05) == [
+        "cc2 attach", "pdo:2", "hex:2c9101082cd102", "ready:5112mV,0mA"]

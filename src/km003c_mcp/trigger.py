@@ -41,6 +41,14 @@ def find_trigger_port(serial_number: str | None = None, override: str | None = N
     return ports[0].device
 
 
+def _render_line(raw: bytes) -> str:
+    """Decode a reply line; binary dumps (e.g. the raw PDO block after "pdo:N") become hex."""
+    raw = raw.strip(b"\r")
+    if all(0x20 <= b < 0x7F or b == 0x09 for b in raw):
+        return raw.decode("ascii").strip()
+    return "hex:" + raw.rstrip(b"\x00").hex()
+
+
 class TriggerPort:
     def __init__(self, port: str, serial_factory=serial.Serial) -> None:
         self.port = port
@@ -62,8 +70,7 @@ class TriggerPort:
                 break
             else:
                 time.sleep(0.01)
-        text = buf.decode("utf-8", "replace")
-        return [line.strip() for line in text.splitlines() if line.strip()]
+        return [line for line in (_render_line(raw) for raw in buf.split(b"\n")) if line]
 
     def ensure_open(self) -> list[str]:
         if self.is_open:
