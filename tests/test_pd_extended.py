@@ -37,7 +37,18 @@ def test_real_get_manufacturer_info():
 def test_extended_message_without_payload():
     m = decode_message(MONITOR_EMPTY_STATUS, 0)
     assert m["type"] == "Status" and m["extended_header"] is None
-    assert "no extended payload" in m["note"]
+    assert "no extended payload" in m["note"] and "unchunked" in m["note"]
+
+
+def test_unchunked_extended_message_with_payload_is_not_truncated():
+    # Unchunked extended messages carry Number of Data Objects = 0; the length comes from
+    # the extended header's Data Size. Get_Battery_Status with battery reference 2.
+    header = (1 << 15) | (1 << 8) | (2 << 6) | 4
+    wire = header.to_bytes(2, "little") + (1).to_bytes(2, "little") + bytes([2])
+    m = decode_message(wire, 0)
+    assert m["extended_header"] == {"chunked": False, "chunk_number": 0, "request_chunk": False,
+                                    "data_size": 1}
+    assert m["payload"] == {"battery_reference": 2}
 
 
 def test_source_capabilities_extended():

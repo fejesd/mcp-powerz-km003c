@@ -67,7 +67,12 @@ def decode_message(wire: bytes, sop: int, source_pdos: list[dict] | None = None)
 
     body_end = 2 + 4 * num_objects
     if extended:
-        _decode_extended(out, wire[:body_end], out["type"])
+        # Unchunked extended messages report zero data objects; their length comes from
+        # the extended header's Data Size instead.
+        if num_objects == 0:
+            body_end = _decode_extended(out, wire, out["type"])
+        else:
+            _decode_extended(out, wire[:body_end], out["type"])
     else:
         objects = [int.from_bytes(wire[i:i + 4], "little")
                    for i in range(2, min(body_end, len(wire)) - 3, 4)]
@@ -92,11 +97,13 @@ def decode_message(wire: bytes, sop: int, source_pdos: list[dict] | None = None)
     return out
 
 
-def _decode_extended(out: dict, wire: bytes, name: str) -> None:
+def _decode_extended(out: dict, wire: bytes, name: str) -> int:
+    """Decode the extended part of a message; return the length of the message body."""
     if len(wire) < 4:
         out["extended_header"] = None
-        out["note"] = "no extended payload captured (header only)"
-        return
+        out["note"] = ("no extended payload captured (header only): likely an unchunked extended "
+                       "message whose payload the meter firmware does not forward")
+        return len(wire)
     ext = decode_extended_header(int.from_bytes(wire[2:4], "little"))
     data = chunk_data(wire, ext)
     out["extended_header"] = ext
@@ -105,6 +112,7 @@ def _decode_extended(out: dict, wire: bytes, name: str) -> None:
         payload = decode_extended_payload(name, data[:ext["data_size"]])
         if payload is not None:
             out["payload"] = payload
+    return len(wire) if ext["chunked"] else 4 + len(data)
 
 
 class PdDecoder:
