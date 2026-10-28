@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from .pd_objects import bits as _bits
 from .pd_objects import decode_data_object, decode_pdo, decode_request
+from .pd_extended import (
+    chunk_data, decode_extended_header, decode_extended_payload, is_complete_in_one_chunk,
+)
 from .pd_vdm import decode_vdm
 from .protocol import PdEvent
 
@@ -63,10 +66,12 @@ def decode_message(wire: bytes, sop: int, source_pdos: list[dict] | None = None)
                 "num_objects": num_objects})
 
     body_end = 2 + 4 * num_objects
-    objects = [int.from_bytes(wire[i:i + 4], "little")
-               for i in range(2, min(body_end, len(wire)) - 3, 4)]
-    out["objects"] = [f"{o:08x}" for o in objects]
-    if not extended:
+    if extended:
+        _decode_extended(out, wire[:body_end], out["type"])
+    else:
+        objects = [int.from_bytes(wire[i:i + 4], "little")
+                   for i in range(2, min(body_end, len(wire)) - 3, 4)]
+        out["objects"] = [f"{o:08x}" for o in objects]
         if name in ("Source_Capabilities", "Sink_Capabilities"):
             # The role comes from the message type: a dual-role port may send either.
             role = "source" if name == "Source_Capabilities" else "sink"
@@ -87,17 +92,57 @@ def decode_message(wire: bytes, sop: int, source_pdos: list[dict] | None = None)
     return out
 
 
+def _decode_extended(out: dict, wire: bytes, name: str) -> None:
+    if len(wire) < 4:
+        out["extended_header"] = None
+        out["note"] = "no extended payload captured (header only)"
+        return
+    ext = decode_extended_header(int.from_bytes(wire[2:4], "little"))
+    data = chunk_data(wire, ext)
+    out["extended_header"] = ext
+    out["data_hex"] = data.hex()
+    if not ext["request_chunk"] and is_complete_in_one_chunk(ext):
+        payload = decode_extended_payload(name, data[:ext["data_size"]])
+        if payload is not None:
+            out["payload"] = payload
+
+
 class PdDecoder:
-    """Stateful decoder that resolves Requests against the last Source_Capabilities."""
+    """Stateful decoder: reassembles chunked extended messages and resolves Requests
+    against the last (EPR_)Source_Capabilities."""
 
     def __init__(self) -> None:
         self.source_pdos: list[dict] | None = None
+        self._chunks: dict[tuple, bytearray] = {}
+
+    def _reassemble(self, msg: dict) -> None:
+        ext = msg.get("extended_header")
+        if not ext or ext["request_chunk"] or is_complete_in_one_chunk(ext):
+            return
+        key = (msg["sop"], msg["type"])
+        if ext["chunk_number"] == 0:
+            self._chunks[key] = bytearray()
+        buf = self._chunks.get(key)
+        if buf is None:
+            return
+        buf += bytes.fromhex(msg["data_hex"])
+        if len(buf) < ext["data_size"]:
+            msg["partial"] = True
+            return
+        del self._chunks[key]
+        msg["reassembled"] = True
+        payload = decode_extended_payload(msg["type"], bytes(buf[:ext["data_size"]]))
+        if payload is not None:
+            msg["payload"] = payload
 
     def decode(self, event: PdEvent) -> dict:
         if event.kind != "message":
             return {"event": event.kind}
         msg = decode_message(event.wire, event.sop if event.sop is not None else 0,
                              self.source_pdos)
+        self._reassemble(msg)
         if msg.get("type") == "Source_Capabilities":
             self.source_pdos = msg["pdos"]
+        elif msg.get("type") == "EPR_Source_Capabilities" and "payload" in msg:
+            self.source_pdos = msg["payload"]["pdos"]
         return msg
