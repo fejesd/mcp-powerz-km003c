@@ -140,3 +140,14 @@ def test_combined_mask_when_both_active():
     wait_until(lambda: (ATT_ADCQUEUE | ATT_PD) in dev.masks)
     rec.stop_pd()
     rec.stop_stream()
+
+
+def test_fast_stream_polls_at_least_every_20ms():
+    # The device returns at most 63 queued samples per reply (6-bit chunk) and drops older ones,
+    # so a 1000 SPS stream must be polled well within 63 ms regardless of the default interval.
+    dev = FakeDevice()
+    rec = Recorder(lambda: dev, poll_interval_s=0.05)
+    rec.start_stream(3)
+    time.sleep(0.3)
+    rec.stop_stream()
+    assert len(dev.masks) >= 10

@@ -22,6 +22,9 @@ from .usb_device import Km003cDevice, Km003cError
 
 CSV_HEADER = ["sequence", "marker", "vbus_v", "ibus_a", "power_w", "cc1_v", "cc2_v", "dp_v", "dm_v"]
 RECENT_SAMPLES = 20
+# A reply carries at most 63 queued samples and older ones are lost, so at 1000 SPS the
+# queue must be drained well within 63 ms.
+FAST_POLL_INTERVAL_S = 0.02
 
 
 @dataclass
@@ -153,6 +156,9 @@ class Recorder:
             with self._state:
                 mask = (ATT_ADCQUEUE if self._stream else 0) | (ATT_PD if self._pd_active else 0)
                 device = self._device
+                poll = self._poll
+                if self._stream and self._stream.rate_index == 3:
+                    poll = min(poll, FAST_POLL_INTERVAL_S)
             if not mask or device is None:
                 return
             try:
@@ -166,7 +172,7 @@ class Recorder:
             except Exception as exc:  # noqa: BLE001 - any failure ends the capture and is reported
                 self._fail(exc)
                 return
-            time.sleep(self._poll)
+            time.sleep(poll)
 
     def _fail(self, exc: Exception) -> None:
         message = f"{type(exc).__name__}: {exc}"
