@@ -18,7 +18,7 @@ from .protocol import (
     ATT_ADCQUEUE, ATT_PD, GRAPH_RATES_SPS, AdcQueueSample, PdEventStream, parse_adcqueue,
     parse_pd, sequence_step,
 )
-from .usb_device import Km003cDevice, Km003cError
+from .usb_device import Km003cDevice, Km003cError, TransportError
 
 CSV_HEADER = ["sequence", "marker", "vbus_v", "ibus_a", "power_w", "cc1_v", "cc2_v", "dp_v", "dm_v"]
 RECENT_SAMPLES = 20
@@ -124,8 +124,10 @@ class _Stream:
 
 class Recorder:
     def __init__(self, device_provider: Callable[[], Km003cDevice], poll_interval_s: float = 0.05,
-                 keep_samples: int = 10_000) -> None:
+                 keep_samples: int = 10_000,
+                 on_transport_error: Callable[[], None] | None = None) -> None:
         self._provider = device_provider
+        self._on_transport_error = on_transport_error
         self._poll = poll_interval_s
         self._keep = keep_samples
         self._state = threading.Lock()
@@ -174,17 +176,36 @@ class Recorder:
                 return
             time.sleep(poll)
 
-    def _fail(self, exc: Exception) -> None:
-        message = f"{type(exc).__name__}: {exc}"
+    def abort(self, reason: str) -> bool:
+        """Mark any running stream/capture as failed without touching the device.
+
+        Returns whether a stream was running.
+        """
         with self._state:
+            had_stream = self._stream is not None
             if self._stream:
                 self._stream.close()
                 self._last_stats = self._stream.stats
                 self._stream = None
-                self._stream_error = message
+                self._stream_error = reason
             if self._pd_active:
                 self._pd_active = False
-                self._pd_error = message
+                self._pd_error = reason
+            return had_stream
+
+    def _fail(self, exc: Exception) -> None:
+        had_stream = self.abort(f"{type(exc).__name__}: {exc}")
+        device = self._device
+        if isinstance(exc, TransportError):
+            # The USB session is gone; let the owner drop it so the next call reopens.
+            if self._on_transport_error is not None:
+                self._on_transport_error()
+        elif had_stream and device is not None:
+            # The link still works, so stop the firmware stream instead of leaving it running.
+            try:
+                device.stop_graph()
+            except Exception:  # noqa: BLE001 - best effort
+                device.graph_rate = None
 
     # --- AdcQueue stream -------------------------------------------------------------
 
@@ -194,11 +215,17 @@ class Recorder:
         with self._state:
             if self._stream is not None:
                 raise Km003cError("a stream is already running; stop it first")
-        device = self._provider()
-        device.start_graph(rate_index)
+        # Open the CSV before starting the firmware stream so a bad path leaves nothing running.
+        stream = _Stream(rate_index, csv_path, self._keep)
+        try:
+            device = self._provider()
+            device.start_graph(rate_index)
+        except BaseException:
+            stream.close()
+            raise
         with self._state:
             self._device = device
-            self._stream = _Stream(rate_index, csv_path, self._keep)
+            self._stream = stream
             self._stream_error = None
         self._ensure_thread()
 

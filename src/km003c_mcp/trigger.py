@@ -72,6 +72,14 @@ class TriggerPort:
         self.is_open = True
         return lines
 
+    def dispose(self) -> None:
+        """Release the serial handle without talking to the device."""
+        try:
+            self._ser.close()
+        except Exception:  # noqa: BLE001 - the port may already be gone
+            pass
+        self.is_open = False
+
     def close(self) -> list[str]:
         try:
             return self.command("pdm close")

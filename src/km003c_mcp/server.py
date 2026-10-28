@@ -37,7 +37,7 @@ class Km003cService:
         self._lock = threading.RLock()
         self._device: Km003cDevice | None = None
         self._trigger: TriggerPort | None = None
-        self.recorder = Recorder(self.device)
+        self.recorder = Recorder(self.device, on_transport_error=self.invalidate_device)
 
     def device(self) -> Km003cDevice:
         with self._lock:
@@ -46,6 +46,8 @@ class Km003cService:
                 device = Km003cDevice(transport)
                 try:
                     device.connect()
+                    # A previous session may have left the firmware streaming; Reject is fine.
+                    device.stop_graph()
                 except Km003cError:
                     transport.close()
                     raise
@@ -53,9 +55,13 @@ class Km003cService:
             return self._device
 
     def invalidate_device(self) -> None:
+        """Drop a broken USB session; the next call opens a fresh one."""
         with self._lock:
             device, self._device = self._device, None
-        if device is not None:
+        if device is None:
+            return
+        self.recorder.abort("USB session reset after a transport error")
+        with device.lock:
             try:
                 device.transport.close()
             except Exception:  # noqa: BLE001 - the link is already broken
@@ -75,7 +81,9 @@ class Km003cService:
 
     def invalidate_trigger(self) -> None:
         with self._lock:
-            self._trigger = None
+            trigger, self._trigger = self._trigger, None
+        if trigger is not None:
+            trigger.dispose()
 
     def shutdown(self) -> None:
         """Best-effort cleanup at process exit."""
@@ -109,7 +117,7 @@ def build_tools(service: Km003cService) -> SimpleNamespace:
             except serial.SerialException as exc:
                 service.invalidate_trigger()
                 return {"error": str(exc), "kind": type(exc).__name__}
-            except (Km003cError, ValueError) as exc:
+            except (Km003cError, ValueError, OSError) as exc:
                 return {"error": str(exc), "kind": type(exc).__name__}
         return wrapper
 
@@ -254,9 +262,9 @@ def build_tools(service: Km003cService) -> SimpleNamespace:
     @safe
     def trigger_close() -> dict:
         """Leave protocol trigger mode (`pdm close`)."""
-        port = service.trigger()
+        lines = service.trigger().close()
         service.invalidate_trigger()
-        return {"command": "pdm close", "lines": port.close()}
+        return {"command": "pdm close", "lines": lines}
 
     @safe
     def trigger_raw(command: str, timeout_s: float = 3) -> dict:

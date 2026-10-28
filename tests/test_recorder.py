@@ -151,3 +151,36 @@ def test_fast_stream_polls_at_least_every_20ms():
     time.sleep(0.3)
     rec.stop_stream()
     assert len(dev.masks) >= 10
+
+
+def test_transport_error_triggers_callback():
+    from km003c_mcp.usb_device import DeviceTimeoutError
+    calls = []
+    dev = FakeDevice(error=DeviceTimeoutError("unplugged"))
+    rec = Recorder(lambda: dev, poll_interval_s=0.001, on_transport_error=lambda: calls.append(1))
+    rec.start_pd()
+    wait_until(lambda: calls == [1])
+
+
+def test_logical_error_stops_device_stream():
+    dev = FakeDevice(error=Km003cError("bad reply"))
+    rec = Recorder(lambda: dev, poll_interval_s=0.001)
+    rec.start_stream(3)
+    wait_until(lambda: ("stop",) in dev.graph)
+    assert not rec.stream_status()["running"]
+
+
+def test_bad_csv_path_does_not_start_graph(tmp_path):
+    dev = FakeDevice()
+    rec = Recorder(lambda: dev, poll_interval_s=0.001)
+    with pytest.raises(OSError):
+        rec.start_stream(3, csv_path=str(tmp_path / "missing" / "s.csv"))
+    assert dev.graph == [] and not rec.stream_status()["running"]
+
+
+def test_abort_stops_running_capture():
+    rec = Recorder(lambda: FakeDevice(), poll_interval_s=0.001)
+    rec.start_stream(3)
+    rec.abort("USB session reset")
+    status = rec.stream_status()
+    assert not status["running"] and "USB session reset" in status["error"]

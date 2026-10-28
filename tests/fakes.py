@@ -65,6 +65,9 @@ class FakeSerial:
         self.queue.clear()
 
     def write(self, data: bytes) -> int:
+        if self.closed:
+            import serial
+            raise serial.PortNotOpenError()
         self.written.append(bytes(data))
         self.queue.extend(self.replies.get(data.decode().strip(), []))
         return len(data)
