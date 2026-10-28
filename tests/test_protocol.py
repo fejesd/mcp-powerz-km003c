@@ -51,3 +51,59 @@ def test_parse_putdata_chain_two_packets():
 def test_parse_putdata_truncated_raises():
     with pytest.raises(ProtocolError):
         parse_putdata(LIVE_ADC[:30])
+
+
+# --- Task 2: AdcQueue and PD parsing ---
+
+import struct  # noqa: E402
+
+from km003c_mcp.protocol import (  # noqa: E402
+    PdStatus, parse_adcqueue, parse_pd, sequence_step,
+)
+
+
+def _sample(seq, uv, ua, aux):
+    return struct.pack("<HHiiHHHH", seq, 3, uv, ua, *aux)
+
+
+def test_parse_adcqueue_units_by_rate():
+    p = _sample(1000, 5_000_000, -1_500_000, (780, 366, 840, 878))
+    s_slow = parse_adcqueue(p, 0)[0]
+    s_fast = parse_adcqueue(p, 3)[0]
+    assert (s_slow.vbus_v, s_slow.ibus_a) == (5.0, -1.5)
+    assert s_slow.cc1_v == pytest.approx(0.078) and s_fast.cc1_v == pytest.approx(0.780)
+    assert (s_slow.sequence, s_slow.marker) == (1000, 3)
+
+
+def test_parse_adcqueue_empty_and_bad_length():
+    assert parse_adcqueue(b"", 3) == []
+    with pytest.raises(ProtocolError):
+        parse_adcqueue(bytes(19), 3)
+
+
+def test_sequence_step():
+    assert [sequence_step(i) for i in range(4)] == [500, 100, 20, 1]
+
+
+def test_parse_pd_status_live_prefix():
+    st = parse_pd(bytes.fromhex("55040200" "0300" "0000" "0000" "0000"))
+    assert st == PdStatus(132181, 0.003, 0.0, 0.0, 0.0)
+
+
+PD_STREAM = (bytes(12)
+             + bytes.fromhex("451027000021")  # connect @ 10000 ms
+             + bytes.fromhex("8b1a27000000") + bytes.fromhex("81112c910100")  # SOP Source_Capabilities
+             + bytes.fromhex("452827000022"))  # disconnect @ 10024 ms
+
+
+def test_parse_pd_event_stream():
+    ev = parse_pd(PD_STREAM).events
+    assert [e.kind for e in ev] == ["connect", "message", "disconnect"]
+    assert (ev[0].timestamp_ms, ev[2].timestamp_ms) == (10000, 10024)
+    assert ev[1].timestamp_ms == 10010 and ev[1].sop == 0
+    assert ev[1].wire == bytes.fromhex("81112c910100")
+
+
+def test_parse_pd_bad_size_flag_raises():
+    with pytest.raises(ProtocolError):
+        parse_pd(bytes(12) + bytes.fromhex("830000000000"))

@@ -157,3 +157,117 @@ def parse_adc(payload: bytes) -> AdcReading:
         dp_avg_v=dp_avg / 1e3,
         dm_avg_v=dm_avg / 1e3,
     )
+
+
+ADCQUEUE_SAMPLE_SIZE = 20
+_SEQUENCE_STEPS = {0: 500, 1: 100, 2: 20, 3: 1}
+
+
+def sequence_step(rate_index: int) -> int:
+    """Expected increment of the device's 1 kHz sample counter per AdcQueue sample."""
+    return _SEQUENCE_STEPS[rate_index]
+
+
+@dataclass(frozen=True)
+class AdcQueueSample:
+    sequence: int
+    marker: int
+    vbus_v: float
+    ibus_a: float
+    cc1_v: float
+    cc2_v: float
+    dp_v: float
+    dm_v: float
+
+
+def parse_adcqueue(payload: bytes, rate_index: int) -> list[AdcQueueSample]:
+    if len(payload) % ADCQUEUE_SAMPLE_SIZE:
+        raise ProtocolError(
+            f"AdcQueue payload length {len(payload)} is not a multiple of {ADCQUEUE_SAMPLE_SIZE}")
+    # Auxiliary voltages are 0.1 mV/count at 2 SPS and 1 mV/count at faster rates.
+    aux_scale = 1e4 if rate_index == 0 else 1e3
+    samples = []
+    for offset in range(0, len(payload), ADCQUEUE_SAMPLE_SIZE):
+        seq, marker, vbus, ibus, cc1, cc2, dp, dm = struct.unpack_from("<HHiiHHHH", payload, offset)
+        samples.append(AdcQueueSample(
+            sequence=seq,
+            marker=marker,
+            vbus_v=vbus / 1e6,
+            ibus_a=ibus / 1e6,
+            cc1_v=cc1 / aux_scale,
+            cc2_v=cc2 / aux_scale,
+            dp_v=dp / aux_scale,
+            dm_v=dm / aux_scale,
+        ))
+    return samples
+
+
+PD_STATUS_SIZE = 12
+PD_EVENT_HEADER_SIZE = 6
+PD_EVENT_CONNECTION = 0x45
+PD_EVENT_CONNECT = 0x21
+PD_EVENT_DISCONNECT = 0x22
+
+
+@dataclass(frozen=True)
+class PdStatus:
+    timestamp_ms: int
+    vbus_v: float
+    ibus_a: float
+    cc1_v: float
+    cc2_v: float
+
+
+@dataclass(frozen=True)
+class PdEvent:
+    timestamp_ms: int
+    kind: str
+    sop: int | None
+    wire: bytes
+
+
+@dataclass(frozen=True)
+class PdEventStream:
+    preamble: PdStatus
+    events: list[PdEvent]
+
+
+def _parse_pd_status(payload: bytes) -> PdStatus:
+    ts, vbus, ibus, cc1, cc2 = struct.unpack_from("<IHhHH", payload)
+    return PdStatus(ts, vbus / 1000, ibus / 1000, cc1 / 1000, cc2 / 1000)
+
+
+def parse_pd(payload: bytes) -> PdStatus | PdEventStream:
+    """Parse a PdPacket attribute: a 12-byte status, or a status preamble plus events."""
+    if len(payload) < PD_STATUS_SIZE:
+        raise ProtocolError(f"PD payload too short: {len(payload)} bytes")
+    preamble = _parse_pd_status(payload)
+    if len(payload) == PD_STATUS_SIZE:
+        return preamble
+
+    events: list[PdEvent] = []
+    offset = PD_STATUS_SIZE
+    while offset < len(payload):
+        if len(payload) - offset < PD_EVENT_HEADER_SIZE:
+            raise ProtocolError(f"truncated PD event header at offset {offset}")
+        head = payload[offset:offset + PD_EVENT_HEADER_SIZE]
+        offset += PD_EVENT_HEADER_SIZE
+        if head[0] == PD_EVENT_CONNECTION:
+            ts = int.from_bytes(head[1:4], "little")
+            code = head[5]
+            if code == PD_EVENT_CONNECT:
+                events.append(PdEvent(ts, "connect", None, b""))
+            elif code == PD_EVENT_DISCONNECT:
+                events.append(PdEvent(ts, "disconnect", None, b""))
+            else:
+                events.append(PdEvent(ts, "message", code, b""))
+            continue
+        wire_len = (head[0] & 0x3F) - 5
+        if wire_len < 0:
+            raise ProtocolError(f"invalid PD event size flag 0x{head[0]:02x} at offset {offset - 6}")
+        if len(payload) - offset < wire_len:
+            raise ProtocolError(f"PD event needs {wire_len} wire bytes at offset {offset}")
+        ts = struct.unpack_from("<I", head, 1)[0]
+        events.append(PdEvent(ts, "message", head[5], bytes(payload[offset:offset + wire_len])))
+        offset += wire_len
+    return PdEventStream(preamble, events)
