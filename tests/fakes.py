@@ -50,3 +50,27 @@ def memory_read_replies(tid: int, address: int, plain: bytes, chunk: int = 16) -
     padded = plain + b"\0" * (memory_cipher_len(len(plain)) - len(plain))
     cipher = aes_ecb(padded, KEY_MEMORY)
     return [confirmation] + [cipher[i:i + chunk] for i in range(0, len(cipher), chunk)]
+
+
+class FakeSerial:
+    """pyserial stand-in: replies are queued when the matching command line is written."""
+
+    def __init__(self, replies: dict[str, list[bytes]]):
+        self.replies = replies
+        self.written: list[bytes] = []
+        self.queue: list[bytes] = []
+        self.closed = False
+
+    def reset_input_buffer(self) -> None:
+        self.queue.clear()
+
+    def write(self, data: bytes) -> int:
+        self.written.append(bytes(data))
+        self.queue.extend(self.replies.get(data.decode().strip(), []))
+        return len(data)
+
+    def read(self, size: int = 1) -> bytes:
+        return self.queue.pop(0) if self.queue else b""
+
+    def close(self) -> None:
+        self.closed = True
