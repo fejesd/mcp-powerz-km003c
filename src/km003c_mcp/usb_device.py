@@ -43,7 +43,11 @@ class DeviceBusyError(Km003cError):
     pass
 
 
-class DeviceTimeoutError(Km003cError):
+class TransportError(Km003cError):
+    """The USB link failed; the session must be reopened."""
+
+
+class DeviceTimeoutError(TransportError):
     pass
 
 
@@ -120,7 +124,7 @@ class PyUsbTransport:
         except usb.core.USBTimeoutError as exc:
             raise DeviceTimeoutError("USB write timed out") from exc
         except usb.core.USBError as exc:
-            raise Km003cError(f"USB write failed: {exc}") from exc
+            raise TransportError(f"USB write failed: {exc}") from exc
 
     def read(self, size: int, timeout_ms: int) -> bytes:
         try:
@@ -128,7 +132,7 @@ class PyUsbTransport:
         except usb.core.USBTimeoutError as exc:
             raise DeviceTimeoutError("no reply from the KM003C") from exc
         except usb.core.USBError as exc:
-            raise Km003cError(f"USB read failed: {exc}") from exc
+            raise TransportError(f"USB read failed: {exc}") from exc
 
     def close(self) -> None:
         try:
