@@ -58,7 +58,7 @@ def test_parse_putdata_truncated_raises():
 import struct  # noqa: E402
 
 from km003c_mcp.protocol import (  # noqa: E402
-    PdStatus, parse_adcqueue, parse_pd, sequence_step,
+    ATT_ADCQUEUE, PdStatus, parse_adcqueue, parse_pd, sequence_step,
 )
 
 
@@ -107,3 +107,12 @@ def test_parse_pd_event_stream():
 def test_parse_pd_bad_size_flag_raises():
     with pytest.raises(ProtocolError):
         parse_pd(bytes(12) + bytes.fromhex("830000000000"))
+
+
+def test_parse_putdata_adcqueue_payload_is_chunk_times_size():
+    # Live capture: AdcQueue ext header carries sample count in `chunk` and bytes per sample in `size`.
+    samples = b"".join(_sample(100 + i, 5_000_000, 0, (0, 0, 0, 0)) for i in range(3))
+    ext = (ATT_ADCQUEUE | (3 << 16) | (20 << 22)).to_bytes(4, "little")
+    _, pkts = parse_putdata(bytes.fromhex("41010000") + ext + samples)
+    assert len(pkts[0].payload) == 60
+    assert [s.sequence for s in parse_adcqueue(pkts[0].payload, 3)] == [100, 101, 102]

@@ -89,15 +89,20 @@ def parse_putdata(data: bytes) -> tuple[Header, list[LogicalPacket]]:
         if len(data) - offset < 4:
             raise ProtocolError(f"truncated extended header at offset {offset}")
         word = struct.unpack_from("<I", data, offset)[0]
+        attribute = word & 0x7FFF
+        chunk = (word >> 16) & 0x3F
         size = word >> 22
+        if attribute == ATT_ADCQUEUE:
+            # AdcQueue: `chunk` is the sample count and `size` the bytes per sample.
+            size *= chunk
         offset += 4
         if len(data) - offset < size:
             raise ProtocolError(
                 f"logical packet needs {size} bytes at offset {offset}, got {len(data) - offset}")
         packet = LogicalPacket(
-            attribute=word & 0x7FFF,
+            attribute=attribute,
             next=bool((word >> 15) & 1),
-            chunk=(word >> 16) & 0x3F,
+            chunk=chunk,
             payload=bytes(data[offset:offset + size]),
         )
         packets.append(packet)
